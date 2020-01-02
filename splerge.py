@@ -3,7 +3,6 @@ import torchvision
 import torch.nn.functional as F
 from torchvision import transforms
 from torch.utils.data import DataLoader
-# import torch.nn as nn
 
 
 class SFCN(torch.nn.Module):
@@ -29,11 +28,11 @@ class SFCN(torch.nn.Module):
 
         return(x)
 
-class RPN(torch.nn.Module):
+class Splerge(torch.nn.Module):
     
     #Our batch shape for input x is (3,256,256)
     def __init__(self):
-        super(RPN, self).__init__()
+        super(Splerge, self).__init__()
         self.blocks = 5
         self.block_inputs = [18, 55, 55, 55, 55]
         self.block_conv1x1_output = 36
@@ -48,7 +47,10 @@ class RPN(torch.nn.Module):
         # self.dil_conv4 = torch.nn.Conv2d(18, 6, kernel_size=5, dilation=4, stride=1, padding=8)
 
         # 1x2 max pooling for rows
-        self.pool = torch.nn.MaxPool2d(kernel_size=(1,2), stride=(1,2))
+        self.row_pool = torch.nn.MaxPool2d(kernel_size=(1,2), stride=(1,2))
+        # 2x1 max pooling for columns
+        self.col_pool = torch.nn.MaxPool2d(kernel_size=(2,1), stride=(2,1))
+
         # 1x1 convolution for top branch
         self.conv4_1x1_top = torch.nn.Conv2d(18, self.block_conv1x1_output, kernel_size=1) 
 
@@ -61,7 +63,6 @@ class RPN(torch.nn.Module):
         return conv_layer(input_feature)
 
     def rpn_block(self, input_feature, block_num):
-        print("="*15,"BLOCK NUMBER:", block_num,"="*15)
         height, width = input_feature.shape[-2:]
 
         # dilated convolutions 2/3/4
@@ -72,7 +73,7 @@ class RPN(torch.nn.Module):
         out_feature = torch.cat((x1, x2, x3), 1)
 
         if block_num < 4:
-            out_feature = self.pool(out_feature)
+            out_feature = self.row_pool(out_feature)
 
         # print("\nTop Branch:")
         top_branch_x = self.conv4_1x1_top(out_feature)
@@ -105,21 +106,76 @@ class RPN(torch.nn.Module):
                 out_feature,
                 None)
 
+    def cpn_block(self, input_feature, block_num):
+        height, width = input_feature.shape[-2:]
+
+        # dilated convolutions 2/3/4
+        x1 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=2, padding=4))
+        x2 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=3, padding=6))
+        x3 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=4, padding=8))
+        # concatenating features
+        out_feature = torch.cat((x1, x2, x3), 1)
+
+        if block_num < 4:
+            out_feature = self.col_pool(out_feature)
+
+        # print("\nTop Branch:")
+        top_branch_x = self.conv4_1x1_top(out_feature)
+        # print("After 1x1 conv, shape:", top_branch_x.shape)
+        top_branch_row_means = torch.mean(top_branch_x, dim=2)
+
+        # print("Row means shape:", top_branch_row_means.shape)
+        top_branch_proj_pools = top_branch_row_means.view(1,self.block_conv1x1_output,1,width).repeat(1,1,top_branch_x.shape[2],1)
+        # print("After projection pooling:", top_branch_proj_pools.shape)
+
+        # print("\nBottom Branch:")
+        bottom_branch_x = self.conv4_1x1_bottom(out_feature)
+        # print("After 1x1 conv, shape:", bottom_branch_x.shape)
+        bottom_branch_row_means = torch.mean(bottom_branch_x, dim=2)
+        # print("Row means shape:", bottom_branch_row_means.shape)
+        bottom_branch_proj_pools = bottom_branch_row_means.view(1,1,1,width).repeat(1,1,top_branch_x.shape[2],1)
+        # print("After projection pooling:", bottom_branch_proj_pools.shape)
+        bottom_branch_sig_probs = torch.sigmoid(bottom_branch_proj_pools)
+        # print("After sigmoid layer:", bottom_branch_sig_probs.shape)
+        
+        if block_num > 2:
+            intermed_probs = bottom_branch_sig_probs[:,:,1,:]
+            return (top_branch_proj_pools, 
+                    bottom_branch_sig_probs, 
+                    out_feature,
+                    intermed_probs)
+
+        return (top_branch_proj_pools, 
+                bottom_branch_sig_probs,
+                out_feature,
+                None)
+
     def forward(self, x):
         print("Input shape:", x.shape)
-        # print("\nSFCN:")
-        x = self.sfcn(x)
-        outputs = []
-        for block_num in range(self.blocks):
-            top, bottom, center, probs = self.rpn_block(input_feature=x, block_num=block_num+1)
-            # print(top.shape, center.shape, bottom.shape)
-            x = torch.cat((top, center, bottom), 1)
-            print("Output shape:", x.shape)
-            if probs is not None:
-                outputs.append(probs)
+        
+        rpn_x = self.sfcn(x)
+        cpn_x = torch.tensor(rpn_x, requires_grad=True)
 
-        r3, r4, r5 = outputs
-        return r3, r4, r5
+        rpn_outputs = []
+        cpn_outputs = []
+        for block_num in range(self.blocks):
+            print("="*15,"BLOCK NUMBER:", block_num+1,"="*15)
+            rpn_top, rpn_bottom, rpn_center, rpn_probs = self.rpn_block(input_feature=rpn_x, block_num=block_num+1)
+            cpn_top, cpn_bottom, cpn_center, cpn_probs = self.cpn_block(input_feature=cpn_x, block_num=block_num+1)
+            
+            rpn_x = torch.cat((rpn_top, rpn_center, rpn_bottom), 1)
+            cpn_x = torch.cat((cpn_top, cpn_center, cpn_bottom), 1)
+            
+            print("RPN output shape:", rpn_x.shape)
+            print("CPN output shape:", cpn_x.shape)
+            
+            if rpn_probs is not None:
+                rpn_outputs.append(rpn_probs)
+
+            if cpn_probs is not None:
+                cpn_outputs.append(cpn_probs)            
+
+        return rpn_outputs, cpn_outputs
 
 def get_logits(sig_probs):
     """
@@ -159,6 +215,7 @@ def splerge_loss(outputs, targets):
     lambda4 = 0.25
 
     r3, r4, r5 = outputs
+    
     r3_logits = get_logits(r3)
     r4_logits = get_logits(r4)
     r5_logits = get_logits(r5)
@@ -174,14 +231,17 @@ input_dim = 32
 sample = torch.rand((1, 3, input_dim, input_dim))
 sample_gt = torch.LongTensor(input_dim).random_(0,2)
 
-model = RPN()
-outputs = model(sample)
+model = Splerge()
+rpn_outputs, cpn_outputs = model(sample)
 
 criterion = splerge_loss
 optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
-loss = criterion(outputs, sample_gt)
-print(loss)
+rpn_loss = criterion(rpn_outputs, sample_gt)
+cpn_loss = criterion(cpn_outputs, sample_gt)
+
+print(rpn_loss)
+print(cpn_loss)
 
 """
 num_epochs = 1
