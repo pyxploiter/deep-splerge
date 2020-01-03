@@ -32,157 +32,182 @@ class SFCN(torch.nn.Module):
 
         return(x)
 
-class Splerge(torch.nn.Module):
-    
-    #Our batch shape for input x is (3,256,256)
-    def __init__(self):
-        super(Splerge, self).__init__()
-        self.blocks = 5
+class RPN(torch.nn.Module):
+
+    def __init__(self, block_num):
+        super(RPN, self).__init__()
+
+        self.block_num = block_num
         self.block_inputs = [18, 55, 55, 55, 55]
         self.block_conv1x1_output = 36
         self.block_output = 55
 
-        # get shared FCN
-        self.sfcn = SFCN()
-
-        #Input channels = 3, output channels = 18
-        # self.dil_conv2 = torch.nn.Conv2d(18, 6, kernel_size=5, dilation=2, stride=1, padding=4)
-        # self.dil_conv3 = torch.nn.Conv2d(18, 6, kernel_size=5, dilation=3, stride=1, padding=6)
-        # self.dil_conv4 = torch.nn.Conv2d(18, 6, kernel_size=5, dilation=4, stride=1, padding=8)
+        self.dil_conv2d_2 = torch.nn.Conv2d(self.block_inputs[self.block_num-1], 6, kernel_size=5, dilation=2, stride=1, padding=4)
+        self.dil_conv2d_3 = torch.nn.Conv2d(self.block_inputs[self.block_num-1], 6, kernel_size=5, dilation=3, stride=1, padding=6)
+        self.dil_conv2d_4 = torch.nn.Conv2d(self.block_inputs[self.block_num-1], 6, kernel_size=5, dilation=4, stride=1, padding=8)
 
         # 1x2 max pooling for rows
         self.row_pool = torch.nn.MaxPool2d(kernel_size=(1,2), stride=(1,2))
-        # 2x1 max pooling for columns
+
+        # 1x1 convolution for top branch
+        self.row_conv_1x1_top = torch.nn.Conv2d(18, self.block_conv1x1_output, kernel_size=1) 
+
+        # 1x1 convolution for bottom branch
+        self.row_conv_1x1_bottom = torch.nn.Conv2d(18, 1, kernel_size=1) 
+
+    def forward(self, x):
+        #################### EXPERIMENT 2 ####################
+        # x = x[0]
+        #################### EXPERIMENT 2 ####################
+        height, width = x.shape[-2:]
+        x1 = F.relu(self.dil_conv2d_2(x))
+        x2 = F.relu(self.dil_conv2d_3(x))
+        x3 = F.relu(self.dil_conv2d_4(x))
+        
+        out_feature = torch.cat((x1, x2, x3), 1)
+
+        if self.block_num < 4:
+            out_feature = self.row_pool(out_feature)
+
+        top_branch_x = self.row_conv_1x1_top(out_feature)
+        top_branch_row_means = torch.mean(top_branch_x, dim=3)
+        top_branch_proj_pools = top_branch_row_means.view(1,self.block_conv1x1_output, height,1).repeat(1,1,1,top_branch_x.shape[3])
+
+        bottom_branch_x = self.row_conv_1x1_bottom(out_feature)
+        bottom_branch_row_means = torch.mean(bottom_branch_x, dim=3)
+        bottom_branch_proj_pools = bottom_branch_row_means.view(1,1, height,1).repeat(1,1,1,bottom_branch_x.shape[3])
+        bottom_branch_sig_probs = torch.sigmoid(bottom_branch_proj_pools)
+
+        rpn_x = torch.cat((top_branch_proj_pools, out_feature, bottom_branch_sig_probs), 1)
+
+        if self.block_num > 2:
+            intermed_probs = bottom_branch_sig_probs[:, :, :, 0]
+            return (rpn_x, intermed_probs)
+
+        return (rpn_x, None)
+
+
+class CPN(torch.nn.Module):
+
+    def __init__(self, block_num):
+        super(CPN, self).__init__()
+
+        self.block_num = block_num
+        self.block_inputs = [18, 55, 55, 55, 55]
+        self.block_conv1x1_output = 36
+        self.block_output = 55
+
+        self.dil_conv2d_2 = torch.nn.Conv2d(self.block_inputs[self.block_num-1], 6, kernel_size=5, dilation=2, stride=1, padding=4)
+        self.dil_conv2d_3 = torch.nn.Conv2d(self.block_inputs[self.block_num-1], 6, kernel_size=5, dilation=3, stride=1, padding=6)
+        self.dil_conv2d_4 = torch.nn.Conv2d(self.block_inputs[self.block_num-1], 6, kernel_size=5, dilation=4, stride=1, padding=8)
+
+        # 1x2 max pooling for rows
         self.col_pool = torch.nn.MaxPool2d(kernel_size=(2,1), stride=(2,1))
 
         # 1x1 convolution for top branch
-        self.conv4_1x1_top = torch.nn.Conv2d(18, self.block_conv1x1_output, kernel_size=1) 
+        self.col_conv_1x1_top = torch.nn.Conv2d(18, self.block_conv1x1_output, kernel_size=1) 
 
         # 1x1 convolution for bottom branch
-        self.conv4_1x1_bottom = torch.nn.Conv2d(18, 1, kernel_size=1) 
+        self.col_conv_1x1_bottom = torch.nn.Conv2d(18, 1, kernel_size=1) 
 
-    # dilated convolutions specifically for this RPN
-    def dil_conv2d(self, input_feature, in_size, out_size=6, kernel_size=5, dilation=1, stride=1, padding=1):
-        conv_layer = torch.nn.Conv2d(in_size, out_size, kernel_size=kernel_size, dilation=dilation, stride=stride, padding=padding).to(device)
-        return conv_layer(input_feature)
-
-    def rpn_block(self, input_feature, block_num):
-        height, width = input_feature.shape[-2:]
-
-        # dilated convolutions 2/3/4
-        x1 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=2, padding=4))
-        x2 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=3, padding=6))
-        x3 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=4, padding=8))
+    def forward(self, x):
+        #################### EXPERIMENT 2 ####################
+        # x = x[0]
+        #################### EXPERIMENT 2 ####################
+        height, width = x.shape[-2:]
+        x1 = F.relu(self.dil_conv2d_2(x))
+        x2 = F.relu(self.dil_conv2d_3(x))
+        x3 = F.relu(self.dil_conv2d_4(x))
         
-        # concatenating features
-        out_feature = torch.cat((x1, x2, x3), 1)
-        # print("After dilated conv,:", out_feature.shape)
-
-        if block_num < 4:
-            out_feature = self.row_pool(out_feature)
-            # print("After row pooling:", out_feature.shape)
-
-        # print("\nTop Branch:")
-        top_branch_x = self.conv4_1x1_top(out_feature)
-        # print("After 1x1 conv, shape:", top_branch_x.shape)
-        top_branch_row_means = torch.mean(top_branch_x, dim=3)
-
-        # print("Row means shape:", top_branch_row_means.shape)
-        top_branch_proj_pools = top_branch_row_means.view(batch_size,self.block_conv1x1_output, height,1).repeat(1,1,1,top_branch_x.shape[3])
-        # print("After projection pooling:", top_branch_proj_pools.shape)
-
-        # print("\nBottom Branch:")
-        bottom_branch_x = self.conv4_1x1_bottom(out_feature)
-        # print("After 1x1 conv, shape:", bottom_branch_x.shape)
-        bottom_branch_row_means = torch.mean(bottom_branch_x, dim=3)
-        # print("Row means shape:", bottom_branch_row_means.shape)
-        bottom_branch_proj_pools = bottom_branch_row_means.view(batch_size,1, height,1).repeat(1,1,1,top_branch_x.shape[3])
-        # print("After projection pooling:", bottom_branch_proj_pools.shape)
-        bottom_branch_sig_probs = torch.sigmoid(bottom_branch_proj_pools)
-        # print("After sigmoid layer:", bottom_branch_sig_probs.shape)
-        
-        if block_num > 2:
-            intermed_probs = bottom_branch_sig_probs[:,:,:,0]
-            return (top_branch_proj_pools, 
-                    bottom_branch_sig_probs, 
-                    out_feature,
-                    intermed_probs)
-
-        return (top_branch_proj_pools, 
-                bottom_branch_sig_probs,
-                out_feature,
-                None)
-
-    def cpn_block(self, input_feature, block_num):
-        height, width = input_feature.shape[-2:]
-
-        # dilated convolutions 2/3/4
-        x1 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=2, padding=4))
-        x2 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=3, padding=6))
-        x3 = F.relu(self.dil_conv2d(input_feature, self.block_inputs[block_num-1], dilation=4, padding=8))
-        # x1.register_hook(lambda x: print(x))
-        # concatenating features
         out_feature = torch.cat((x1, x2, x3), 1)
 
-        if block_num < 4:
+        if self.block_num < 4:
             out_feature = self.col_pool(out_feature)
 
-        # print("\nTop Branch:")
-        top_branch_x = self.conv4_1x1_top(out_feature)
-        # print("After 1x1 conv, shape:", top_branch_x.shape)
+        top_branch_x = self.col_conv_1x1_top(out_feature)
         top_branch_row_means = torch.mean(top_branch_x, dim=2)
+        top_branch_proj_pools = top_branch_row_means.view(1,self.block_conv1x1_output, 1, width).repeat(1,1,top_branch_x.shape[2],1)
 
-        # print("Row means shape:", top_branch_row_means.shape)
-        top_branch_proj_pools = top_branch_row_means.view(batch_size,self.block_conv1x1_output,1,width).repeat(1,1,top_branch_x.shape[2],1)
-        # print("After projection pooling:", top_branch_proj_pools.shape)
-
-        # print("\nBottom Branch:")
-        bottom_branch_x = self.conv4_1x1_bottom(out_feature)
-        # print("After 1x1 conv, shape:", bottom_branch_x.shape)
+        bottom_branch_x = self.col_conv_1x1_bottom(out_feature)
         bottom_branch_row_means = torch.mean(bottom_branch_x, dim=2)
-        # print("Row means shape:", bottom_branch_row_means.shape)
-        bottom_branch_proj_pools = bottom_branch_row_means.view(batch_size,1,1,width).repeat(1,1,top_branch_x.shape[2],1)
-        # print("After projection pooling:", bottom_branch_proj_pools.shape)
+        bottom_branch_proj_pools = bottom_branch_row_means.view(1,1,1,width).repeat(1,1,bottom_branch_x.shape[2],1)
         bottom_branch_sig_probs = torch.sigmoid(bottom_branch_proj_pools)
-        # print("After sigmoid layer:", bottom_branch_sig_probs.shape)
-        
-        if block_num > 2:
-            intermed_probs = bottom_branch_sig_probs[:,:,1,:]
-            return (top_branch_proj_pools, 
-                    bottom_branch_sig_probs, 
-                    out_feature,
-                    intermed_probs)
 
-        return (top_branch_proj_pools, 
-                bottom_branch_sig_probs,
-                out_feature,
-                None)
+        cpn_x = torch.cat((top_branch_proj_pools, out_feature, bottom_branch_sig_probs), 1)
+        
+        if self.block_num > 2:
+            intermed_probs = bottom_branch_sig_probs[:, :, 0, :]
+            return (cpn_x, intermed_probs)
+
+        return (cpn_x, None)
+
+class Splerge(torch.nn.Module):
+    
+    #Our batch shape for input x is (3,?,?)
+    def __init__(self):
+        super(Splerge, self).__init__()
+        self.blocks = 5
+        self.sfcn = SFCN()
+
+        #################### EXPERIMENT 2 ####################
+        # self.rpn_blocks = list()
+        # self.rpn_blocks.append(RPN(block_num=1))
+        # self.rpn_blocks.append(RPN(block_num=2))
+        # self.rpn_blocks.append(RPN(block_num=3))
+        # self.rpn_blocks.append(RPN(block_num=4))
+        # self.rpn_blocks.append(RPN(block_num=5))
+        # self.rpn_net = torch.nn.Sequential(*self.rpn_blocks)        
+
+        # self.cpn_blocks = list()
+        # self.cpn_blocks.append(CPN(block_num=1))
+        # self.cpn_blocks.append(CPN(block_num=2))
+        # self.cpn_blocks.append(CPN(block_num=3))
+        # self.cpn_blocks.append(CPN(block_num=4))
+        # self.cpn_blocks.append(CPN(block_num=5))
+        # self.cpn_net = torch.nn.Sequential(*self.cpn_blocks)
+        #################### EXPERIMENT 2 ####################
+        
+        self.rpn_block_1 = RPN(block_num=1)
+        self.rpn_block_2 = RPN(block_num=2)
+        self.rpn_block_3 = RPN(block_num=3)
+        self.rpn_block_4 = RPN(block_num=4)
+        self.rpn_block_5 = RPN(block_num=5)
+
+        self.cpn_block_1 = CPN(block_num=1)
+        self.cpn_block_2 = CPN(block_num=2)
+        self.cpn_block_3 = CPN(block_num=3)
+        self.cpn_block_4 = CPN(block_num=4)
+        self.cpn_block_5 = CPN(block_num=5)
 
     def forward(self, x):
         # print("Input shape:", x.shape)
-        
-        rpn_x = self.sfcn(x)
-        cpn_x = rpn_x.clone().detach().requires_grad_(True)
+
+        #################### EXPERIMENT 2 ####################
+        # rpn_x = self.sfcn(x)
+        # cpn_x = rpn_x
         # cpn_x = self.sfcn(x)
+        # rpn_x = self.rpn_net((rpn_x, None))
+        # cpn_x = self.cpn_net((cpn_x, None))
+        # print(rpn_x[0].shape, rpn_x[1].shape)
+        #################### EXPERIMENT 2 ####################
 
-        rpn_outputs = []
-        cpn_outputs = []
-        for block_num in range(self.blocks):
-            # print("="*15,"BLOCK NUMBER:", block_num+1,"="*15)
-            rpn_top, rpn_bottom, rpn_center, rpn_probs = self.rpn_block(input_feature=rpn_x, block_num=block_num+1)
-            cpn_top, cpn_bottom, cpn_center, cpn_probs = self.cpn_block(input_feature=cpn_x, block_num=block_num+1)
-            
-            rpn_x = torch.cat((rpn_top, rpn_center, rpn_bottom), 1)
-            cpn_x = torch.cat((cpn_top, cpn_center, cpn_bottom), 1)
-            
-            # print("RPN output shape:", rpn_x)
-            # print("CPN output shape:", cpn_x)
-            
-            if rpn_probs is not None:
-                rpn_outputs.append(rpn_probs)
+        x = self.sfcn(x)
 
-            if cpn_probs is not None:
-                cpn_outputs.append(cpn_probs)            
+        rpn_x, _ = self.rpn_block_1(x)
+        rpn_x, _ = self.rpn_block_2(rpn_x)
+        rpn_x, rpn_probs_1 = self.rpn_block_3(rpn_x)
+        rpn_x, rpn_probs_2 = self.rpn_block_4(rpn_x)
+        rpn_x, rpn_probs_3 = self.rpn_block_5(rpn_x)
+
+        rpn_outputs = [rpn_probs_1, rpn_probs_2, rpn_probs_3]
+
+        cpn_x, _ = self.cpn_block_1(x)
+        cpn_x, _ = self.cpn_block_2(cpn_x)
+        cpn_x, cpn_probs_1 = self.cpn_block_3(cpn_x)
+        cpn_x, cpn_probs_2 = self.cpn_block_4(cpn_x)
+        cpn_x, cpn_probs_3 = self.cpn_block_5(cpn_x)
+
+        cpn_outputs = [cpn_probs_1, cpn_probs_2, cpn_probs_3]
 
         return rpn_outputs, cpn_outputs
 
@@ -208,8 +233,6 @@ def cross_entropy_loss(logits, targets):
     # print(logits.shape, targets.shape)
     # print(torch.abs(x-y))
     log_prob = -1.0 * F.log_softmax(logits, 1)
-    # print(log_prob.shape)
-    # print(targets.long().unsqueeze(2).shape)
     loss = log_prob.gather(2, targets.unsqueeze(2))
     loss = loss.mean()
     return loss
@@ -231,7 +254,8 @@ def splerge_loss(outputs, targets):
     r3, r4, r5 = rpn_outputs
     c3, c4, c5 = cpn_outputs
     
-    # print(rpn_targets.shape)
+    # print(r5)
+    
     r3_logits = get_logits(r3)
     r4_logits = get_logits(r4)
     r5_logits = get_logits(r5)
@@ -240,13 +264,25 @@ def splerge_loss(outputs, targets):
     c4_logits = get_logits(c4)
     c5_logits = get_logits(c5)
 
-    rl3 = cross_entropy_loss(r3_logits, rpn_targets)
-    rl4 = cross_entropy_loss(r4_logits, rpn_targets)
-    rl5 = cross_entropy_loss(r5_logits, rpn_targets)
+    crit = torch.nn.BCELoss()
+    rpn_targets = rpn_targets.float()
+    cpn_targets = cpn_targets.float()
+    # print(r3_logits.shape, rpn_targets.shape)
+    rl3 = crit(r3, rpn_targets)
+    rl4 = crit(r4, rpn_targets)
+    rl5 = crit(r5, rpn_targets)
 
-    cl3 = cross_entropy_loss(c3_logits, cpn_targets)
-    cl4 = cross_entropy_loss(c4_logits, cpn_targets)
-    cl5 = cross_entropy_loss(c5_logits, cpn_targets)
+    cl3 = crit(c3, cpn_targets)
+    cl4 = crit(c4, cpn_targets)
+    cl5 = crit(c5, cpn_targets)
+
+    # rl3 = cross_entropy_loss(r3_logits, rpn_targets)
+    # rl4 = cross_entropy_loss(r4_logits, rpn_targets)
+    # rl5 = cross_entropy_loss(r5_logits, rpn_targets)
+
+    # cl3 = cross_entropy_loss(c3_logits, cpn_targets)
+    # cl4 = cross_entropy_loss(c4_logits, cpn_targets)
+    # cl5 = cross_entropy_loss(c5_logits, cpn_targets)
 
     rpn_loss = rl5 + (lambda4 * rl4) + (lambda3 * rl3)
     cpn_loss = cl5 + (lambda4 * cl4) + (lambda3 * cl3)
@@ -255,48 +291,14 @@ def splerge_loss(outputs, targets):
 
     loss = rpn_loss + cpn_loss
 
+    # return rpn_loss
     return loss
 
 def collate_fn(batch):
     return tuple(zip(*batch))
 
-def plot_grad_flow(named_parameters):
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from matplotlib.lines import Line2D
-
-    '''Plots the gradients flowing through different layers in the net during training.
-    Can be used for checking for possible gradient vanishing / exploding problems.
-    
-    Usage: Plug this function in Trainer class after loss.backwards() as 
-    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
-    ave_grads = []
-    max_grads= []
-    layers = []
-    for n, p in named_parameters:
-        print(p.grad)
-        # p.grad = torch.Variable(10)
-        # if(p.requires_grad) and ("bias" not in n):
-        #     layers.append(n)
-        #     ave_grads.append(p.grad.abs().mean())
-        #     max_grads.append(p.grad.abs().max())
-    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
-    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
-    plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
-    plt.xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
-    plt.xlim(left=0, right=len(ave_grads))
-    plt.ylim(bottom = -0.001, top=0.02) # zoom in on the lower gradient regions
-    plt.xlabel("Layers")
-    plt.ylabel("average gradient")
-    plt.title("Gradient flow")
-    plt.grid(True)
-    plt.legend([Line2D([0], [0], color="c", lw=4),
-                Line2D([0], [0], color="b", lw=4),
-                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
-
-num_epochs = 50
-batch_size = 2
-learning_rate = 0.001
+batch_size = 1
+learning_rate = 0.0001
 
 MODEL_STORE_PATH = 'model'
 
@@ -315,7 +317,7 @@ test_dataset = torch.utils.data.Subset(dataset, indices[-20:])
 
 # define training and validation data loaders
 train_loader = DataLoader(
-    dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    dataset=train_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
    # collate_fn=collate_fn)
 
 test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
@@ -325,14 +327,12 @@ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 print("creating splerge model...")
 model = Splerge().to(device)
 # model = Splerge()
-# print(model)
-
+print(model)
 # print(dir(model))
-print(model.cpn_block)
-plot_grad_flow(model.named_parameters())
+# print(model.cpn_block)
 # for name, param in model.named_parameters():
 #     print(name)
-exit(0)
+# exit(0)
 
 criterion = splerge_loss
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -342,97 +342,115 @@ total_step = len(train_loader)
 loss_list = []
 acc_list = []
 
-from torchsummary import summary
-summary(model, (3,100,100))
+image, target = None, None
 
-model.train()
-print("starting training...")
-for epoch in range(num_epochs):
-    for i, (images, targets) in enumerate(train_loader):
-        images = images.to(device)
-        
-        targets[0] = targets[0].long().to(device)
-        targets[1] = targets[1].long().to(device)
-        
-        # print("images:", images.shape)
-        # print("targets", targets[0].shape)
-        
-        # Run the forward pass
-        outputs = model(images)
-        loss = criterion(outputs, targets)
+num_epochs = 300
+train = True
+evaluate = False
 
-        loss_list.append(loss.item())
+if train:
+    model.train()
+    print("starting training...")
+    for epoch in range(num_epochs):
+        if (epoch+1) % 100 == 0:
+            torch.save(model.state_dict(), MODEL_STORE_PATH+'/model_ep{}.pth'.format(epoch+1))
 
-        # Backprop and perform Adam optimisation
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        for i, (images, targets, img_path) in enumerate(train_loader):
+            # print(img_path)
+            images = images.to(device)
+            
+            targets[0] = targets[0].long().to(device)
+            targets[1] = targets[1].long().to(device)
+            
+            image, target = images, targets
 
-        # # Track the accuracy
-        # total = labels.size(0)
-        # _, predicted = torch.max(outputs.data, 1)
-        # correct = (predicted == labels).sum().item()
-        # acc_list.append(correct / total)
+            # print("images:", images.shape)
+            # print("targets", targets[0].shape)
 
-        if (i + 1) % 5 == 0:
-            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'
+            # Backprop and perform Adam optimisation
+            optimizer.zero_grad()        
+            
+            # Run the forward pass
+            outputs = model(images)
+            loss = criterion(outputs, targets)
+
+            loss_list.append(loss.item())
+
+            loss.backward()
+            optimizer.step()
+
+            # for name, param in model.named_parameters():
+            #     print(name, param.grad)
+
+            # # Track the accuracy
+            # total = labels.size(0)
+            # _, predicted = torch.max(outputs.data, 1)
+            # correct = (predicted == labels).sum().item()
+            # acc_list.append(correct / total)
+
+            if (i + 1) % 5 == 0:
+                print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'
                   .format(epoch + 1, num_epochs, i + 1, total_step, loss.item()))
 
-"""
-num_epochs = 1
-num_classes = 10
-batch_size = 1
-learning_rate = 0.001
 
-DATA_PATH = 'data'
-MODEL_STORE_PATH = 'model'
+############ EVALUATION ###############
+if evaluate:
+    # torch.save(model.state_dict(), MODEL_STORE_PATH+'/model_ep{}.pth'.format(epoch+1))
+    model.load_state_dict(torch.load(MODEL_STORE_PATH+"/model_ep300.pth"))
+    model.to(device)
+    model.eval()
 
-# transforms to apply to the data
-trans = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+    with torch.no_grad():
+        output = model(image)
+        rpn_o, cpn_o = output
 
-# MNIST dataset
-train_dataset = torchvision.datasets.MNIST(root=DATA_PATH, train=True, transform=trans, download=True)
-test_dataset = torchvision.datasets.MNIST(root=DATA_PATH, train=False, transform=trans)
+        loss = criterion(output, target)
+        print(loss)
 
-train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
+        r3, r4, r5 = rpn_o
+        c3, c4, c5 = cpn_o
 
-model = RPN()
-print(model)
+        r3, r4, r5 = r3[0][0], r4[0][0], r5[0][0] 
+        c3, c4, c5 = c3[0][0], c4[0][0], c5[0][0]
 
-# Loss and optimizer
-criterion = torch.nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        tr5 = target[0][0]
+        tc5 = target[1][0]
 
-# Train the model
-total_step = len(train_loader)
-loss_list = []
-acc_list = []
+        cout = c5.clone()
+        cout[cout > 0.7] = 255
+        cout[cout <= 0.7] = 0
+        cout = cout.view(1, cout.shape[0]).repeat(cout.shape[0], 1)
+        cout = cout.cpu().numpy()
 
-for epoch in range(num_epochs):
-    for i, (images, labels) in enumerate(train_loader):
-        # Run the forward pass
-        print(images.shape)
-        outputs = model(images)
-        print(outputs.shape)
-        break
-        loss = criterion(outputs, labels)
-        loss_list.append(loss.item())
+        rout = r5.clone()
+        rout[rout > 0.7] = 255
+        rout[rout <= 0.7] = 0
+        rout = rout.view(rout.shape[0], 1).repeat(1, rout.shape[0])
+        rout = rout.cpu().numpy()
+        
+        tcout = tc5.view(1, tc5.shape[0]).repeat(tc5.shape[0], 1)
+        tcout = tcout.cpu().numpy()
+        tcout[tcout == 1] = 255
 
-        # Backprop and perform Adam optimisation
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        trout = tr5.view(tr5.shape[0], 1).repeat(1, tr5.shape[0])
+        trout = trout.cpu().numpy()
+        trout[trout == 1] = 255
 
-        # Track the accuracy
-        total = labels.size(0)
-        _, predicted = torch.max(outputs.data, 1)
-        correct = (predicted == labels).sum().item()
-        acc_list.append(correct / total)
+        import cv2
+        cv2.imwrite("col_out.png", cout)
+        cv2.imwrite("row_out.png", rout)
+        cv2.imwrite("col.png", tcout)
+        cv2.imwrite("row.png", trout)
+        
+        cv2.imshow("col_out", cout.astype("uint8"))
+        cv2.imshow("col", tcout.astype("uint8"))
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        cv2.imshow("row_out", rout.astype("uint8"))
+        cv2.imshow("row", trout.astype("uint8"))
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
-        if (i + 1) % 100 == 0:
-            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Accuracy: {:.2f}%'
-                  .format(epoch + 1, num_epochs, i + 1, total_step, loss.item(),
-                          (correct / total) * 100))
-
-"""
+        # print(torch.abs(tr5 - r5))
+        print(torch.sum(torch.abs(tr5 - r5)))
+        print(torch.sum(torch.abs(tc5 - c5)))

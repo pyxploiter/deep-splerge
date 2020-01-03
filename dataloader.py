@@ -7,7 +7,7 @@ import cv2
 from skimage import transform as sktsf
 from torchvision import transforms as tvtsf
 
-def preprocess_image(image, min_size=100, max_size=100):
+def preprocess_image(image, min_size=600, max_size=600):
     # Rescaling Images
     C, H, W = image.shape
     min_size = min_size
@@ -39,7 +39,7 @@ class TableDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path = os.path.join(self.root, self.train_images_path , self.img_paths[idx])
         img_name = img_path.split("/")[-1][:-4]
-
+        
         row_label_path = os.path.join(self.root, self.train_labels_path , img_name+"_row.txt")
         col_label_path = os.path.join(self.root, self.train_labels_path , img_name+"_col.txt")
         
@@ -89,7 +89,7 @@ class TableDataset(torch.utils.data.Dataset):
         if self.transforms is not None:
             image, target = self.transforms(image, target)
         
-        return image, target
+        return image, target, img_path
 
     def __len__(self):
         return len(self.img_paths)
