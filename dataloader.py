@@ -39,7 +39,7 @@ class TableDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path = os.path.join(self.root, self.train_images_path , self.img_paths[idx])
         img_name = img_path.split("/")[-1][:-4]
-        
+
         row_label_path = os.path.join(self.root, self.train_labels_path , img_name+"_row.txt")
         col_label_path = os.path.join(self.root, self.train_labels_path , img_name+"_col.txt")
         
@@ -93,24 +93,5 @@ class TableDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.img_paths)
-
-# train_images_path = "data/images"
-# train_labels_path = "data/labels"
-
-# dataset = TableDataset(os.getcwd(), train_images_path, train_labels_path, get_transform(train=True))
-
-# # split the dataset in train and test set
-# torch.manual_seed(1)
-# indices = torch.randperm(len(dataset)).tolist()
-
-# dataset = torch.utils.data.Subset(dataset, indices)
-
-# # define training and validation data loaders
-# data_loader = torch.utils.data.DataLoader(
-#     dataset, batch_size=1, shuffle=True, num_workers=1,
-#     collate_fn=lambda batch: tuple(zip(*batch)))
-
-# for image, target in data_loader:
-#     print(image, target)
 
 
