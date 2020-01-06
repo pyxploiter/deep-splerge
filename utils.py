@@ -52,6 +52,7 @@ def splerge_loss(outputs, targets):
     # c4_logits = get_logits(c4)
     # c5_logits = get_logits(c5)
 
+    # TODO: update cross entropy loss acc. to the paper
     crit = torch.nn.BCELoss()
     rpn_targets = rpn_targets.float()
     cpn_targets = cpn_targets.float()
@@ -76,12 +77,9 @@ def splerge_loss(outputs, targets):
     rpn_loss = rl5 + (lambda4 * rl4) + (lambda3 * rl3)
     cpn_loss = cl5 + (lambda4 * cl4) + (lambda3 * cl3)
     
-    # print("rpn_loss:", round(rpn_loss.item(),4), "cpn_loss:", round(cpn_loss.item(),4))
-
     loss = rpn_loss + cpn_loss
 
-    # return rpn_loss
-    return loss
+    return loss, rpn_loss, cpn_loss
 
 def collate_fn(batch):
     return tuple(zip(*batch))
