@@ -1,8 +1,10 @@
 import os
 import argparse
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from transforms import get_transform
 from dataloader import TableDataset
@@ -15,12 +17,27 @@ parser.add_argument("-p", "--train_images_dir", dest="train_images_dir", help="P
 parser.add_argument("-l", "--train_labels_dir", dest="train_labels_dir", help="Path to training data labels.")
 parser.add_argument("-o","--output_weight_path", dest="output_weight_path", help="Output path for weights.", default="model")
 parser.add_argument("-e","--num_epochs", type=int, dest="num_epochs", help="Number of epochs.", default=10)
-parser.add_argument("--cf","--check_freq", type=int, dest="checkpoint_freq", help="Save checkpoints after given epochs", default=50)
+parser.add_argument("-s","--save_every", type=int, dest="save_every", help="Save checkpoints after given epochs", default=50)
+parser.add_argument("--log_every", type=int, dest="log_every", help="Print logs after every given steps", default=10)
+parser.add_argument("--val_every", type=int, dest="val_every", help="perform validation after given steps", default=100)
 parser.add_argument("-b","--batch_size", type=int, dest="batch_size", help="batch size of training samples", default=2)
-parser.add_argument("--lr","--learning_rate", dest="learning_rate", help="learning rate", default=0.0005)
-parser.add_argument("--vs","--validation_split", dest="validation_split", help="validation split in data", default=0.2)
+parser.add_argument("--lr","--learning_rate", type=float, dest="learning_rate", help="learning rate", default=0.0005)
+parser.add_argument("--vs","--validation_split", type=float, dest="validation_split", help="validation split in data", default=0.2)
 
 options = parser.parse_args()
+
+print(25*"=", "Configuration", 25*"=")
+print("Train Images Directory:", options.train_images_dir)
+print("Train Labels Directory:", options.train_labels_dir)
+print("Output Weights Path:", options.output_weight_path)
+print("Number of Epochs:", options.num_epochs)
+print("Save Checkpoint Frequency:", options.save_every)
+print("Display logs after steps:", options.log_every)
+print("Perform validation after steps:", options.val_every)
+print("Batch Size:", options.batch_size)
+print("Learning Rate:", options.learning_rate)
+print("Validation Split:", options.validation_split)
+print(65*"=")
 
 batch_size = options.batch_size
 learning_rate = options.learning_rate
@@ -49,30 +66,34 @@ test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=Fa
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-print("creating splerge model...")
+print("Creating splerge model...")
 model = Splerge().to(device)
-print(model)
+# print(model)
 
 criterion = splerge_loss
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-# Train the model
-total_step = len(train_loader)
-loss_list = []
-acc_list = []
-
 num_epochs = options.num_epochs
 
-model.train()
-print("starting training...")
+# create the summary writer
+writer = SummaryWriter()
+
+# Train the model
+total_step = len(train_loader)
+
+print(27*"=", "Training", 27*"=")
+
+step = 0
 for epoch in range(num_epochs):
-    if ((epoch+1) % checkpoint_freq == 0):
-        print("saving model weights at epoch", epoch+1)
+    if ((epoch+1) % options.save_every == 0):
+        print(65*"=")
+        print("Saving model weights at epoch", epoch+1)
         torch.save(model.state_dict(), MODEL_STORE_PATH+'/model_ep{}.pth'.format(epoch+1))
+        print(65*"=")
 
     for i, (images, targets, img_path) in enumerate(train_loader):
-        # print(img_path)
-        images = images.to(device)
+        model.train()
+        step -=- 1
         
         targets[0] = targets[0].long().to(device)
         targets[1] = targets[1].long().to(device)
@@ -81,21 +102,43 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()        
         
         # Run the forward pass
-        outputs = model(images)
+        outputs = model(images.to(device))
         loss = criterion(outputs, targets)
-
-        loss_list.append(loss.item())
 
         loss.backward()
         optimizer.step()
 
+        if (i+1) % options.log_every == 0:
+            #writing loss to tensorboard
+            writer.add_scalar("training loss",loss.item(), step)
+            print('Epoch [{}/{}], Step [{}/{}], Training Loss: {:.4f}'
+              .format(epoch + 1, num_epochs, i + 1, total_step, loss.item()))
+
+        if (i+1) % options.val_every == 0:
+            print(26*"~", "Validation", 26*"~")
+            model.eval()
+            with torch.no_grad():
+                val_loss_list = list()
+                for x, (val_images, val_targets, _) in enumerate(test_loader):
+                    val_targets[0] = val_targets[0].long().to(device)
+                    val_targets[1] = val_targets[1].long().to(device)
+
+                    val_outputs = model(val_images.to(device))
+                    val_loss = criterion(val_outputs, val_targets)
+                    val_loss_list.append(val_loss.item())
+
+                avg_val_loss = np.mean(np.array(val_loss_list))
+
+                writer.add_scalar("validation loss", avg_val_loss, step)
+                print('Step [{}/{}], Validation Loss: {:.4f}'
+                  .format(x + 1, len(test_loader), avg_val_loss))
+            print(64*"~")
+            
         # # Track the accuracy
         # total = labels.size(0)
         # _, predicted = torch.max(outputs.data, 1)
         # correct = (predicted == labels).sum().item()
         # acc_list.append(correct / total)
 
-        if (i + 1) % 5 == 0:
-            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'
-              .format(epoch + 1, num_epochs, i + 1, total_step, loss.item()))
+        
 
