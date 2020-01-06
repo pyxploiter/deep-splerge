@@ -1,4 +1,6 @@
 import os
+import argparse
+
 import torch
 from torch.utils.data import DataLoader
 
@@ -6,16 +8,28 @@ from transforms import get_transform
 from dataloader import TableDataset
 from splerge import Splerge
 from utils import splerge_loss
-# from utils import collate_fn
 
-batch_size = 2
+parser = argparse.ArgumentParser()
+
+parser.add_argument("-p", "--train_images_dir", dest="train_images_dir", help="Path to training data images.")
+parser.add_argument("-l", "--train_labels_dir", dest="train_labels_dir", help="Path to training data labels.")
+parser.add_argument("-o","--output_weight_path", dest="output_weight_path", help="Output path for weights.", default="model")
+parser.add_argument("-e","--num_epochs", type=int, dest="num_epochs", help="Number of epochs.", default=10)
+parser.add_argument("--cf","--check_freq", type=int, dest="checkpoint_freq", help="Save checkpoints after given epochs", default=50)
+parser.add_argument("-b","--batch_size", type=int, dest="batch_size", help="batch size of training samples", default=2)
+parser.add_argument("--lr","--learning_rate", dest="learning_rate", help="learning rate", default=0.0005)
+parser.add_argument("--vs","--validation_split", dest="validation_split", help="validation split in data", default=0.2)
+
+options = parser.parse_args()
+
+batch_size = options.batch_size
+learning_rate = options.learning_rate
 num_workers = 1
-learning_rate = 0.0001
 
-MODEL_STORE_PATH = 'model'
+MODEL_STORE_PATH = options.output_weight_path
 
-train_images_path = "data/images"
-train_labels_path = "data/labels"
+train_images_path = options.train_images_dir
+train_labels_path = options.train_labels_dir
 
 print("Loading dataset...")
 dataset = TableDataset(os.getcwd(), train_images_path, train_labels_path, get_transform(train=True))
@@ -24,14 +38,13 @@ dataset = TableDataset(os.getcwd(), train_images_path, train_labels_path, get_tr
 torch.manual_seed(1)
 indices = torch.randperm(len(dataset)).tolist()
 
-train_dataset = torch.utils.data.Subset(dataset, indices[:-20])
-test_dataset = torch.utils.data.Subset(dataset, indices[-20:])
+test_split = int(options.validation_split * len(indices))
+
+train_dataset = torch.utils.data.Subset(dataset, indices[test_split:])
+test_dataset = torch.utils.data.Subset(dataset, indices[:test_split])
 
 # define training and validation data loaders
-train_loader = DataLoader(
-    dataset=train_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-   # collate_fn=collate_fn)
-
+train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -48,13 +61,13 @@ total_step = len(train_loader)
 loss_list = []
 acc_list = []
 
-num_epochs = 300
-save_model = False
+num_epochs = options.num_epochs
 
 model.train()
 print("starting training...")
 for epoch in range(num_epochs):
-    if ((epoch+1) % 10 == 0) and save_model:
+    if ((epoch+1) % checkpoint_freq == 0):
+        print("saving model weights at epoch", epoch+1)
         torch.save(model.state_dict(), MODEL_STORE_PATH+'/model_ep{}.pth'.format(epoch+1))
 
     for i, (images, targets, img_path) in enumerate(train_loader):

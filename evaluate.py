@@ -9,7 +9,7 @@ from dataloader import TableDataset
 from transforms import get_transform
 from splerge import Splerge
 
-model_path = "model/model_ep10.pth"
+model_path = "model/model_ep300.pth"
 
 train_images_path = "data/images"
 train_labels_path = "data/labels"
@@ -34,7 +34,6 @@ test_dataset = torch.utils.data.Subset(dataset, indices[-20:])
 # define training and validation data loaders
 train_loader = DataLoader(
     dataset=train_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-   # collate_fn=collate_fn)
 
 test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -42,7 +41,7 @@ device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 
 print("creating splerge model...")
 model = Splerge().to(device)
-print(model)
+# print(model)
 
 print("loading weights...")
 model.load_state_dict(torch.load(model_path))
@@ -50,7 +49,7 @@ model.load_state_dict(torch.load(model_path))
 model.eval()
 print("starting evaluation...")
 with torch.no_grad():
-    for i, (images, targets, img_path) in enumerate(train_loader):
+    for i, (images, targets, img_path) in enumerate(test_loader):
         img_name = img_path[0].split("/")[-1][:-4]
 
         images = images.to(device)
@@ -105,24 +104,13 @@ with torch.no_grad():
         cout = process_output_image(cout, test_image.copy())
         rout = process_output_image(rout, test_image.copy())
 
-        # break
         cv2.imwrite(output_path+img_name+"_col_out.png", cout)
         cv2.imwrite(output_path+img_name+"_row_out.png", rout)
         cv2.imwrite(output_path+img_name+"_col_gt.png", tcout)
         cv2.imwrite(output_path+img_name+"_row_gt.png", trout)
 
-        
         print('Step [{}/{}] Image: {}'
           .format(i+1, len(train_loader), img_name))
-
-        # cv2.imshow("col_out", cout.astype("uint8"))
-        # cv2.imshow("col", tcout.astype("uint8"))
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
-        # cv2.imshow("row_out", rout.astype("uint8"))
-        # cv2.imshow("row", trout.astype("uint8"))
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
 
         # # print(torch.abs(tr5 - r5))
         # print(torch.sum(torch.abs(tr5 - r5)))
