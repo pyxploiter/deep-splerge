@@ -73,7 +73,7 @@ model = Splerge().to(device)
 
 criterion = splerge_loss
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=options.decay_rate)
+lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=options.decay_rate)
 
 num_epochs = options.num_epochs
 
@@ -158,10 +158,21 @@ for epoch in range(num_epochs):
         if ((step+1) % options.save_every == 0):
             print(65*"=")
             print("Saving model weights at iteration", step+1)
-            torch.save(model.state_dict(), MODEL_STORE_PATH+'/model.pth')
+            
+            torch.save({
+                'epoch': epoch+1,
+                'iteration': step+1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss,
+                'rpn_loss': rpn_loss,
+                'cpn_loss': cpn_loss
+            }, MODEL_STORE_PATH+'/model.pth')
+
+            # torch.save(model.state_dict(), MODEL_STORE_PATH+'/model.pth')
             print(65*"=")
 
         torch.cuda.empty_cache()
-        
+
     lr_scheduler.step() 
 
