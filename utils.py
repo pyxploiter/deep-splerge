@@ -1,3 +1,5 @@
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -83,3 +85,137 @@ def splerge_loss(outputs, targets):
 
 def collate_fn(batch):
     return tuple(zip(*batch))
+
+def get_column_separators(image, smoothing=2, is_row=True):
+    if is_row:
+        cols = np.where(np.sum(image, axis=1)!=0)[0]
+    else:
+        cols = np.where(np.sum(image, axis=0)!=0)[0]
+
+    if len(cols) == 0:
+        return []
+
+    adjacent_cols = [cols[0]]
+    final_seperators = []
+    for i in range(1, len(cols)):
+
+        if cols[i] - cols[i - 1] < smoothing:
+            adjacent_cols.append(cols[i])
+            
+        elif len(adjacent_cols) > 0:
+            final_seperators.append(sum(adjacent_cols) // len(adjacent_cols))
+            adjacent_cols = [cols[i]]
+
+    if len(adjacent_cols) > 0:
+        final_seperators.append(sum(adjacent_cols) // len(adjacent_cols))
+    
+    return final_seperators
+
+def get_midpoints_from_grid(grid):
+
+    row_sep = np.where(np.sum(grid, axis=1) == grid.shape[1])[0]
+    col_sep = np.where(np.sum(grid, axis=0) == grid.shape[0])[0]
+
+    def find_midpoint(indices):
+        
+        adj_indices = [indices[0]]
+        midpoints = []
+
+        for i in range(1, len(indices)):
+            if indices[i] - indices[i - 1] == 1:
+                adj_indices.append(indices[i])
+            
+            elif len(adj_indices) > 0:
+                midpoints.append(sum(adj_indices) // len(adj_indices))
+                adj_indices = [indices[i]]
+
+        if len(adj_indices) > 0:
+            midpoints.append(sum(adj_indices) // len(adj_indices))
+
+        return midpoints
+
+    col_midpoints, row_midpoints = [], []
+
+    if len(row_sep):
+        row_midpoints = find_midpoint(row_sep)
+
+    if len(col_sep):
+        col_midpoints = find_midpoint(col_sep)
+        
+    return row_midpoints, col_midpoints
+
+
+def tensor_to_numpy_image(tensor, display=False, write_path=None):
+    tensor = tensor.squeeze(0)  #1,c,h,w -> c,h,w
+    c, h, w = tensor.shape
+    np_array = np.array(tensor.view(h,w,c).detach())
+    np_array[np_array > 0.7] = 255
+    np_array[np_array <= 0.7] = 0
+
+    if display:
+        cv2.imshow("image"+str(torch.rand(3)), np_array)
+        # cv2.waitKey(0)
+    if write_path:
+        cv2.imwrite(write_path, np_array)
+
+    return np_array
+
+def probs_to_image(tensor, image_shape, axis):
+    """this converts probabilities tensor to image"""
+    # (1, 1, n) = tensor.shape
+    # b,c,h,w = image_shape
+    b, c, h, w = image_shape
+    if axis == 0:
+        tensor_image = tensor.view(1,1,tensor.shape[2]).repeat(1,h,1)
+    
+    elif axis == 1:
+        tensor_image = tensor.view(1,tensor.shape[2],1).repeat(1,1,w)
+    
+    else:
+        print("Error: invalid axis.")
+
+    return tensor_image.unsqueeze(0) 
+
+def binary_grid_from_prob_images(row_prob_img, col_prob_img, thresh=0.7):
+    
+    row_prob_img[row_prob_img > thresh] = 1
+    row_prob_img[row_prob_img <= thresh] = 0
+    
+    col_prob_img[col_prob_img > thresh] = 1
+    col_prob_img[col_prob_img <= thresh] = 0
+    
+    # row_indices = np.unique(np.where(row_prob_img.squeeze(0).squeeze(0) == 1)[0])
+    # col_indices = np.unique(np.where(col_prob_img.squeeze(0).squeeze(0).transpose(1,0) == 1)[0])
+    
+    row_indices = get_column_separators(row_prob_img.squeeze(0).squeeze(0).detach().numpy(), smoothing=5, is_row=True)
+    col_indices = get_column_separators(col_prob_img.squeeze(0).squeeze(0).detach().numpy(), smoothing=5, is_row=False)
+
+    # tensor_to_numpy_image(row_prob_img, True)
+    # tensor_to_numpy_image(col_prob_img, True)
+
+    # print("row ind:",row_indices)
+    # print("col ind:",col_indices)
+
+    for i in col_indices:
+        trans_col_prob_img = col_prob_img[0][0].transpose(1,0)
+        if (i > 0):
+            trans_col_prob_img[i+1:i+4] = 1.0
+            trans_col_prob_img[max(0,i-3):i] = 1.0
+
+    row_prob_img = row_prob_img[0][0]
+    for i in row_indices:
+        if (i > 0):
+            row_prob_img[i+1:i+4] = 1.0
+            row_prob_img[max(0,i-3):i] = 1.0
+
+    row_prob_img = row_prob_img.unsqueeze(0).unsqueeze(0) 
+
+    grid = row_prob_img.int() | col_prob_img.int()
+    grid = grid.float()
+    # tensor_to_numpy_image(row_prob_img, True)
+    # tensor_to_numpy_image(col_prob_img, True)
+    # tensor_to_numpy_image(grid, True)
+    # cv2.waitKey(0)
+    
+    return grid
+
