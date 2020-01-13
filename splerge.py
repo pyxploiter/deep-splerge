@@ -61,10 +61,12 @@ class RPN(torch.nn.Module):
 
         top_branch_x = self.row_conv_1x1_top(out_feature)
         top_branch_row_means = torch.mean(top_branch_x, dim=3)
+        # TODO: can be used unsqueeze(3) instead view
         top_branch_proj_pools = top_branch_row_means.view(batch_size,self.block_conv1x1_output, height,1).repeat(1,1,1,top_branch_x.shape[3])
 
         bottom_branch_x = self.row_conv_1x1_bottom(out_feature)
         bottom_branch_row_means = torch.mean(bottom_branch_x, dim=3)
+        # TODO: can be used unsqueeze(3) instead view
         bottom_branch_proj_pools = bottom_branch_row_means.view(batch_size,1,height,1).repeat(1,1,1,bottom_branch_x.shape[3])
         bottom_branch_sig_probs = torch.sigmoid(bottom_branch_proj_pools)
 
@@ -114,10 +116,12 @@ class CPN(torch.nn.Module):
 
         top_branch_x = self.col_conv_1x1_top(out_feature)
         top_branch_col_means = torch.mean(top_branch_x, dim=2)
+        # TODO: can be used unsqueeze(2) instead view
         top_branch_proj_pools = top_branch_col_means.view(batch_size,self.block_conv1x1_output, 1, width).repeat(1,1,top_branch_x.shape[2],1)
 
         bottom_branch_x = self.col_conv_1x1_bottom(out_feature)
         bottom_branch_col_means = torch.mean(bottom_branch_x, dim=2)
+        # TODO: can be used unsqueeze(2) instead view
         bottom_branch_proj_pools = bottom_branch_col_means.view(batch_size,1,1,width).repeat(1,1,bottom_branch_x.shape[2],1)
         bottom_branch_sig_probs = torch.sigmoid(bottom_branch_proj_pools)
 
