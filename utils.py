@@ -86,6 +86,22 @@ def splerge_loss(outputs, targets):
 def collate_fn(batch):
     return tuple(zip(*batch))
 
+def getBack(var_grad_fn):
+    print(var_grad_fn)
+    for n in var_grad_fn.next_functions:
+        if n[0]:
+            try:
+
+                tensor = getattr(n[0], 'variable')
+                print(n[0])
+                # print('tensor with grad found:', tensor)
+                print(' - gradient:', tensor.grad)
+                print(' - grad_fn:', tensor.grad_fn)
+                print()
+            except AttributeError as e:
+                print(e)
+                getBack(n[0])
+
 def get_column_separators(image, smoothing=2, is_row=True):
     if is_row:
         cols = np.where(np.sum(image, axis=1)!=0)[0]
@@ -117,7 +133,7 @@ def get_midpoints_from_grid(grid):
     col_sep = np.where(np.sum(grid, axis=0) == grid.shape[0])[0]
 
     def find_midpoint(indices):
-        
+
         adj_indices = [indices[0]]
         midpoints = []
 
@@ -154,7 +170,6 @@ def tensor_to_numpy_image(tensor, display=False, write_path=None):
 
     if display:
         cv2.imshow("image"+str(torch.rand(3)), np_array)
-        # cv2.waitKey(0)
     if write_path:
         cv2.imwrite(write_path, np_array)
 
@@ -176,46 +191,36 @@ def probs_to_image(tensor, image_shape, axis):
 
     return tensor_image.unsqueeze(0) 
 
-def binary_grid_from_prob_images(row_prob_img, col_prob_img, thresh=0.7):
+def binary_grid_from_prob_images(row_prob_img, col_prob_img, thresh=0.7, smoothing=20):
     
     row_prob_img[row_prob_img > thresh] = 1
     row_prob_img[row_prob_img <= thresh] = 0
     
     col_prob_img[col_prob_img > thresh] = 1
     col_prob_img[col_prob_img <= thresh] = 0
+        
+    row_indices = get_column_separators(row_prob_img.squeeze(0).squeeze(0).detach().numpy(), smoothing=smoothing, is_row=True)
+    col_indices = get_column_separators(col_prob_img.squeeze(0).squeeze(0).detach().numpy(), smoothing=smoothing, is_row=False)
     
-    # row_indices = np.unique(np.where(row_prob_img.squeeze(0).squeeze(0) == 1)[0])
-    # col_indices = np.unique(np.where(col_prob_img.squeeze(0).squeeze(0).transpose(1,0) == 1)[0])
-    
-    row_indices = get_column_separators(row_prob_img.squeeze(0).squeeze(0).detach().numpy(), smoothing=5, is_row=True)
-    col_indices = get_column_separators(col_prob_img.squeeze(0).squeeze(0).detach().numpy(), smoothing=5, is_row=False)
-
-    # tensor_to_numpy_image(row_prob_img, True)
-    # tensor_to_numpy_image(col_prob_img, True)
-
-    # print("row ind:",row_indices)
-    # print("col ind:",col_indices)
+    col_smooth_image = torch.zeros(col_prob_img.shape)
+    row_smooth_image = torch.zeros(row_prob_img.shape)
 
     for i in col_indices:
-        trans_col_prob_img = col_prob_img[0][0].transpose(1,0)
+        col_img = col_smooth_image[0][0].transpose(1,0)
         if (i > 0):
-            trans_col_prob_img[i+1:i+4] = 1.0
-            trans_col_prob_img[max(0,i-3):i] = 1.0
+            col_img[i+1:i+4] = 1.0
+            col_img[max(0,i-3):i+1] = 1.0
 
-    row_prob_img = row_prob_img[0][0]
+    row_img = row_smooth_image[0][0]
     for i in row_indices:
         if (i > 0):
-            row_prob_img[i+1:i+4] = 1.0
-            row_prob_img[max(0,i-3):i] = 1.0
+            row_img[i+1:i+4] = 1.0
+            row_img[max(0,i-3):i+1] = 1.0
 
-    row_prob_img = row_prob_img.unsqueeze(0).unsqueeze(0) 
+    row_img = row_img.unsqueeze(0).unsqueeze(0) 
 
-    grid = row_prob_img.int() | col_prob_img.int()
+    grid = row_img.int() | col_smooth_image.int()
     grid = grid.float()
-    # tensor_to_numpy_image(row_prob_img, True)
-    # tensor_to_numpy_image(col_prob_img, True)
-    # tensor_to_numpy_image(grid, True)
-    # cv2.waitKey(0)
     
     return grid
 
