@@ -75,6 +75,7 @@ class Table(GTElement):
         self.cells = []
         self.gtRows = []
         self.gtCols = []
+        self.ocr_filling = [[]]
         self.gtCells = None
 
     def __str__(self):
@@ -96,6 +97,31 @@ class Table(GTElement):
             self.gtCols.remove(elem)
         elif elem in self.gtSpans:
             self.gtSpans.remove(elem)
+        self.evaluateCells()
+
+    def populate_ocr(self, ocr_data):
+        for cell in self.gtCells:
+            for item in cell:
+                for bnd_box in ocr_data:
+                    if ((bnd_box[2] > item.x1) and (bnd_box[3] > item.y1) and (bnd_box[4] < item.x2) and (bnd_box[5] < item.y2)):
+                        item.words.append(bnd_box)
+
+    def merge_header(self):
+        for i, row in enumerate(self.gtCells):
+            if i > 0:
+                break
+            for j, cell in enumerate(row):
+                if len(cell.words) == 0:
+                    if j == 0 and len(row) > 1:
+                        p1 = cell.getCenter
+                        p2 = row[j+1].getCenter
+                        e_merge = Row(p1, p2)
+                        self.gtSpans.append(e_merge)
+                    else:
+                        p1 = row[j+1].getCenter 
+                        p2 = cell.getCenter
+                        e_merge = Row(p1, p2)
+                        self.gtSpans.append(e_merge)
         self.evaluateCells()
 
     def getCellAtPoint(self, p):
