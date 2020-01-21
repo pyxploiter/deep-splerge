@@ -3,11 +3,9 @@ import torch.nn.functional as F
 
 class SFCN(torch.nn.Module):
     
-    #Our batch shape for input x is (3,?,?)
     def __init__(self):
         super(SFCN, self).__init__()
         
-        #Input channels = 3, output channels = 18
         self.conv1 = torch.nn.Conv2d(3, 18, kernel_size=7, stride=1, padding=3)
 
         self.conv2 = torch.nn.Conv2d(18, 18, kernel_size=7, stride=1, padding=3)
@@ -16,8 +14,6 @@ class SFCN(torch.nn.Module):
         
     def forward(self, x):
         
-        #Computes the activation of the first convolution
-        #Size changes from (3,?,?) to (18,?,?)
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.dil_conv3(x))
@@ -133,11 +129,12 @@ class CPN(torch.nn.Module):
 
         return (cpn_x, None)
 
-class Splerge(torch.nn.Module):
+class SplitModel(torch.nn.Module):
     
-    #Our batch shape for input x is (3,?,?)
-    def __init__(self):
-        super(Splerge, self).__init__()
+    def __init__(self, eval_mode=False):
+        super(SplitModel, self).__init__()
+
+        self.eval_mode = eval_mode
         self.blocks = 5
         self.sfcn = SFCN()
         
@@ -154,7 +151,6 @@ class Splerge(torch.nn.Module):
         self.cpn_block_5 = CPN(block_num=5)
 
     def forward(self, x):
-        # print("Input shape:", x.shape)
 
         x = self.sfcn(x)
 
@@ -174,4 +170,7 @@ class Splerge(torch.nn.Module):
 
         cpn_outputs = [cpn_probs_1, cpn_probs_2, cpn_probs_3]
 
+        if self.eval_mode:
+            return rpn_outputs[2], cpn_outputs[2]
+            
         return rpn_outputs, cpn_outputs

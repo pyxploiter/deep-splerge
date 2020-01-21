@@ -8,8 +8,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from transforms import get_transform
 from dataloader import TableDataset
-from splerge import Splerge
-from utils import splerge_loss
+from split import SplitModel
+from utils import split_loss
 
 parser = argparse.ArgumentParser()
 
@@ -25,29 +25,29 @@ parser.add_argument("--lr","--learning_rate", type=float, dest="learning_rate", 
 parser.add_argument("--dr","--decay_rate", type=float, dest="decay_rate", help="weight decay rate", default=0.75)
 parser.add_argument("--vs","--validation_split", type=float, dest="validation_split", help="validation split in data", default=0.1)
 
-options = parser.parse_args()
+configs = parser.parse_args()
 
 print(25*"=", "Configuration", 25*"=")
-print("Train Images Directory:", options.train_images_dir)
-print("Train Labels Directory:", options.train_labels_dir)
-print("Validation Split:", options.validation_split)
-print("Output Weights Path:", options.output_weight_path)
-print("Number of Epochs:", options.num_epochs)
-print("Save Checkpoint Frequency:", options.save_every)
-print("Display logs after steps:", options.log_every)
-print("Perform validation after steps:", options.val_every)
-print("Batch Size:", options.batch_size)
-print("Learning Rate:", options.learning_rate)
-print("Decay Rate:", options.decay_rate)
+print("Train Images Directory:", configs.train_images_dir)
+print("Train Labels Directory:", configs.train_labels_dir)
+print("Validation Split:", configs.validation_split)
+print("Output Weights Path:", configs.output_weight_path)
+print("Number of Epochs:", configs.num_epochs)
+print("Save Checkpoint Frequency:", configs.save_every)
+print("Display logs after steps:", configs.log_every)
+print("Perform validation after steps:", configs.val_every)
+print("Batch Size:", configs.batch_size)
+print("Learning Rate:", configs.learning_rate)
+print("Decay Rate:", configs.decay_rate)
 print(65*"=")
 
-batch_size = options.batch_size
-learning_rate = options.learning_rate
+batch_size = configs.batch_size
+learning_rate = configs.learning_rate
 
-MODEL_STORE_PATH = options.output_weight_path
+MODEL_STORE_PATH = configs.output_weight_path
 
-train_images_path = options.train_images_dir
-train_labels_path = options.train_labels_dir
+train_images_path = configs.train_images_dir
+train_labels_path = configs.train_labels_dir
 
 print("Loading dataset...")
 dataset = TableDataset(os.getcwd(), train_images_path, train_labels_path, get_transform(train=True), False)
@@ -56,7 +56,7 @@ dataset = TableDataset(os.getcwd(), train_images_path, train_labels_path, get_tr
 torch.manual_seed(1)
 indices = torch.randperm(len(dataset)).tolist()
 
-test_split = int(options.validation_split * len(indices))
+test_split = int(configs.validation_split * len(indices))
 
 train_dataset = torch.utils.data.Subset(dataset, indices[test_split:])
 val_dataset = torch.utils.data.Subset(dataset, indices[:test_split])
@@ -67,15 +67,15 @@ val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=Fals
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-print("Creating splerge model...")
-model = Splerge().to(device)
+print("Creating split model...")
+model = SplitModel().to(device)
 # print(model)
 
-criterion = splerge_loss
+criterion = split_loss
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=options.decay_rate)
+lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=configs.decay_rate)
 
-num_epochs = options.num_epochs
+num_epochs = configs.num_epochs
 
 # create the summary writer
 writer = SummaryWriter()
@@ -87,17 +87,13 @@ print(27*"=", "Training", 27*"=")
 
 step = 0
 for epoch in range(num_epochs):
-    # if ((epoch+1) % options.save_every == 0):
-    #     print(65*"=")
-    #     print("Saving model weights at epoch", epoch+1)
-    #     torch.save(model.state_dict(), MODEL_STORE_PATH+'/model_ep{}.pth'.format(epoch+1))
-    #     print(65*"=")
 
     for i, (images, targets, img_path) in enumerate(train_loader):
 
         images = images.to(device)
 
         model.train()
+        # incrementing step
         step -=- 1
         
         targets[0] = targets[0].long().to(device)
@@ -113,7 +109,7 @@ for epoch in range(num_epochs):
         loss.backward()
         optimizer.step()
 
-        if (i+1) % options.log_every == 0:
+        if (i+1) % configs.log_every == 0:
             #writing loss to tensorboard
             writer.add_scalar("total loss train",loss.item(), (epoch*total_step + i))
             writer.add_scalar("rpn loss train", rpn_loss.item(), (epoch*total_step + i))
@@ -123,7 +119,7 @@ for epoch in range(num_epochs):
               .format(epoch + 1, num_epochs, i + 1, total_step, loss.item(), rpn_loss.item(), cpn_loss.item()))
             print("---")
 
-        if (i+1) % options.val_every == 0:
+        if (i+1) % configs.val_every == 0:
             print(26*"~", "Validation", 26*"~")
             model.eval()
             with torch.no_grad():
@@ -155,7 +151,7 @@ for epoch in range(num_epochs):
 
             print(64*"~")
 
-        if ((step+1) % options.save_every == 0):
+        if ((step+1) % configs.save_every == 0):
             print(65*"=")
             print("Saving model weights at iteration", step+1)
             

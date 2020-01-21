@@ -1,38 +1,17 @@
 import os
-import torch
 
+import torch
 import numpy as np
 import cv2
 
-from skimage import transform as sktsf
-from torchvision import transforms as tvtsf
+from utils import preprocess_image
+from utils import normalize_numpy_image
 
-def preprocess_image(image, min_size=600, max_size=1024, resize=False):
-    # Rescaling Images
-    C, H, W = image.shape
-    min_size = min_size
-    max_size = max_size
-    scale1 = min_size / min(H, W)
-    scale2 = max_size / max(H, W)
-    scale = min(scale1, scale2)
-    image = image / 255.
-
-    if resize:
-        image = sktsf.resize(image, (C, min_size, max_size), mode='reflect',anti_aliasing=False)
-    else:
-        image = sktsf.resize(image, (C, H * scale, W * scale), mode='reflect',anti_aliasing=False)
-
-    # Normalizing image
-    normalize = tvtsf.Normalize(mean=[0.485, 0.456, 0.406],
-                            std=[0.229, 0.224, 0.225])
-    image = normalize(torch.from_numpy(image))
-
-    return image
 
 class TableDataset(torch.utils.data.Dataset):
-    def __init__(self, root, train_images_path, train_labels_path, transforms=None, resize=False):
+    def __init__(self, root, train_images_path, train_labels_path, transforms=None, fix_resize=False):
         
-        self.resize = resize
+        self.fix_resize = fix_resize
         self.root = root
         self.transforms = transforms
         self.train_images_path = train_images_path
@@ -58,7 +37,9 @@ class TableDataset(torch.utils.data.Dataset):
             image = image.transpose((2, 0, 1))
 
         C, H, W = image.shape
-        image = preprocess_image(image, resize=self.resize)
+        image = preprocess_image(image, fix_resize=self.fix_resize)
+        image = normalize_numpy_image(image)
+
         image = image.numpy()
 
         if not (os.path.isfile(row_label_path) and os.path.isfile(col_label_path)):
