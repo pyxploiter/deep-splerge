@@ -1,14 +1,15 @@
 import os
+import pickle
 
 import torch
 import numpy as np
 import cv2
 
-from utils import preprocess_image
+from utils import resize_image
 from utils import normalize_numpy_image
 
 
-class TableDataset(torch.utils.data.Dataset):
+class SplitTableDataset(torch.utils.data.Dataset):
     def __init__(self, root, train_images_path, train_labels_path, transforms=None, fix_resize=False):
         
         self.fix_resize = fix_resize
@@ -37,7 +38,7 @@ class TableDataset(torch.utils.data.Dataset):
             image = image.transpose((2, 0, 1))
 
         C, H, W = image.shape
-        image = preprocess_image(image, fix_resize=self.fix_resize)
+        image = resize_image(image, fix_resize=self.fix_resize)
         image = normalize_numpy_image(image)
 
         image = image.numpy()
@@ -68,13 +69,42 @@ class TableDataset(torch.utils.data.Dataset):
         col_target = torch.tensor(col_target[0])
 
         target = [row_target, col_target]
-        # print(target[0].shape, target[1].shape)
+        
         image = image.transpose((1,2,0))
 
         if self.transforms is not None:
             image, target = self.transforms(image, target)
         
-        return image, target, img_path
+        return image, target, img_path, W, H
+
+    def __len__(self):
+        return len(self.img_paths)
+
+
+class MergeTableDataset(torch.utils.data.Dataset):
+    def __init__(self, root, train_features_path, train_labels_path, transforms=None):
+        self.root = root
+        self.train_features_path = train_features_path
+        self.train_labels_path = train_labels_path
+        self.transforms = transforms
+        
+        self.feature_paths_list = list(sorted(os.listdir(os.path.join(self.root, self.train_features_path))))
+
+    def __getitem__(self, idx):
+        feature_path = os.path.join(self.root, self.train_features_path , self.feature_paths_list[idx])
+        file_name = self.feature_paths_list[idx][:-4]
+        target_path = os.path.join(self.root, self.train_labels_path, file_name)
+        
+        with open(feature_path, "rb") as f:
+            input_feature = pickle.load(feature_path)
+
+        with open(target_path, "rb") as f:
+            target = pickle.load(target_path)
+
+        # if self.transforms is not None:
+        #     image, target = self.transforms(image, target)
+        
+        return input_feature, target, feature_path
 
     def __len__(self):
         return len(self.img_paths)
