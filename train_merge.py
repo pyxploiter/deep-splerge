@@ -71,6 +71,7 @@ test_split = int(configs.validation_split * len(indices))
 train_dataset = torch.utils.data.Subset(dataset, indices[test_split:])
 val_dataset = torch.utils.data.Subset(dataset, indices[:test_split])
 
+
 # define training and validation data loaders
 train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
 val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
@@ -82,12 +83,12 @@ model = MergeModel().to(device)
 
 criterion = merge_loss
 # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-optimizer = torch.optim.ASGD(model.parameters(), lr=0.01)
+optimizer = torch.optim.Adamax(model.parameters(), lr=0.002, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=configs.decay_rate)
 
 # create the summary writer
 writer = SummaryWriter()
-
+torch.autograd.set_detect_anomaly(True)
 # Train the model
 total_step = len(train_loader)
 
@@ -100,16 +101,20 @@ total_r_loss = 0
 
 restore = False
 if restore:
-    checkpoint = torch.load("model/merge_model.pth")
+    checkpoint = torch.load("model/merge_model_hr.pth")
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     epoch = checkpoint['epoch']
     loss = checkpoint['loss']
     step = checkpoint['iteration']
-
+    print("Restoring model from:")
+    print("Iterations:", step)
+    print("Epochs:", epoch)
+    print("Loss:", loss)
 else:
     step = 0
 
+# MERGE DATA, Adamax 0.002, [0.5,1]
 for epoch in range(num_epochs):
 
     for i, (image, _, img_path, W, H) in enumerate(train_loader):
@@ -163,7 +168,7 @@ for epoch in range(num_epochs):
                 optimizer.zero_grad()
                 outputs = model(input_feature.to(device))
 
-                loss, d_loss, r_loss = merge_loss(outputs, (gt_down, gt_right), [0.75, 1.25])
+                loss, d_loss, r_loss = merge_loss(outputs, (gt_down, gt_right), [0.5,1])
 
                 loss.backward()
                 # d_loss.backward(retain_graph=True)
@@ -174,7 +179,7 @@ for epoch in range(num_epochs):
                 total_d_loss += d_loss.item()
                 total_r_loss += r_loss.item()
 
-                if (i+1) % configs.log_every == 0:
+                if (step) % configs.log_every == 0:
                     # writing loss to tensorboard
                     writer.add_scalar("training losses/combined loss", loss.item(), step)
                     writer.add_scalar("training losses/down loss", d_loss.item(), step)
@@ -184,84 +189,84 @@ for epoch in range(num_epochs):
                     writer.add_scalar("training average losses/down loss", total_d_loss/step, step)
                     writer.add_scalar("training average losses/right loss", total_r_loss/step, step)
 
-                    for name, param in model.named_parameters():
-                        if "bias" in name:
-                            writer.add_histogram("bias/"+name, param, step)
-                        else:
-                            writer.add_histogram("weights/"+name, param, step) 
-
                     print("Iteration:", step, "Learning Rate:", lr_scheduler.get_lr()[0])
                     print('Epoch [{}/{}], Step [{}/{}], Train Loss: {:.4f}, Down Loss: {:.4f}, Right Loss: {:.4f}'
                       .format(epoch + 1, num_epochs, i + 1, total_step, loss.item(), d_loss.item(), r_loss.item()))
                     print("---")
 
-                if (i+1) % configs.val_every == 0:
-                        print(26*"~", "Validation", 26*"~")
-                        model.eval()
-                        with torch.no_grad():
-                            val_loss_list = list()
-                            val_down_loss_list = list()
-                            val_right_loss_list = list()
+                if (step) % configs.val_every == 0:
 
-                            for x, (val_image, _, val_img_path, Wv, Hv) in enumerate(val_loader):
-                                            
-                                val_img_name = val_img_path[0].split("/")[-1][:-4]
+                    print(26*"~", "Validation", 26*"~")
+                    model.eval()
+                    with torch.no_grad():
+                        val_loss_list = list()
+                        val_down_loss_list = list()
+                        val_right_loss_list = list()
 
-                                with open("data/split_outs/"+val_img_name+".pkl", "rb") as f:
-                                    val_split_outputs = pickle.load(f)
+                        for x, (val_image, _, val_img_path, Wv, Hv) in enumerate(val_loader):
+                                        
+                            val_img_name = val_img_path[0].split("/")[-1][:-4]
 
-                                val_row_prob = val_split_outputs["row_prob"]
-                                val_col_prob = val_split_outputs["col_prob"]
+                            with open("data/split_outs/"+val_img_name+".pkl", "rb") as f:
+                                val_split_outputs = pickle.load(f)
 
-                                thresh = 0.7
+                            val_row_prob = val_split_outputs["row_prob"]
+                            val_col_prob = val_split_outputs["col_prob"]
 
-                                vcol_prob_img = utils.probs_to_image(val_col_prob.detach().clone(), val_image.shape, axis=0)
-                                vrow_prob_img = utils.probs_to_image(val_row_prob.detach().clone(), val_image.shape, axis=1)
+                            thresh = 0.7
 
-                                vcol_region = vcol_prob_img.detach().clone()
-                                vcol_region[vcol_region > thresh] = 1 
-                                vcol_region[vcol_region <= thresh] = 0
-                                vcol_region = (~vcol_region.bool()).float()
+                            vcol_prob_img = utils.probs_to_image(val_col_prob.detach().clone(), val_image.shape, axis=0)
+                            vrow_prob_img = utils.probs_to_image(val_row_prob.detach().clone(), val_image.shape, axis=1)
 
-                                vrow_region = vrow_prob_img.detach().clone()
-                                vrow_region[vrow_region > thresh] = 1
-                                vrow_region[vrow_region <= thresh] = 0
-                                vrow_region = (~vrow_region.bool()).float()    
+                            vcol_region = vcol_prob_img.detach().clone()
+                            vcol_region[vcol_region > thresh] = 1 
+                            vcol_region[vcol_region <= thresh] = 0
+                            vcol_region = (~vcol_region.bool()).float()
 
-                                vgrid_img, vrow_img, vcol_img = utils.binary_grid_from_prob_images(vrow_prob_img, vcol_prob_img)
+                            vrow_region = vrow_prob_img.detach().clone()
+                            vrow_region[vrow_region > thresh] = 1
+                            vrow_region[vrow_region <= thresh] = 0
+                            vrow_region = (~vrow_region.bool()).float()    
 
-                                vrow_img = cv2.resize(vrow_img[0,0].numpy(), (Wv[0].item(), Hv[0].item()))
-                                vcol_img = cv2.resize(vcol_img[0,0].numpy(), (Wv[0].item(), Hv[0].item()))
+                            vgrid_img, vrow_img, vcol_img = utils.binary_grid_from_prob_images(vrow_prob_img, vcol_prob_img)
 
-                                vgt_down, vgt_right = utils.create_merge_gt(vrow_img, vcol_img, os.path.join(merges_path, img_name + ".pkl"))
-                                
-                                vinput_feature = torch.cat((val_image, 
-                                                        vrow_prob_img, 
-                                                        vcol_prob_img,
-                                                        vrow_region, 
-                                                        vcol_region, 
-                                                        vgrid_img), 
-                                                    1)
+                            vrow_img = cv2.resize(vrow_img[0,0].numpy(), (Wv[0].item(), Hv[0].item()))
+                            vcol_img = cv2.resize(vcol_img[0,0].numpy(), (Wv[0].item(), Hv[0].item()))
 
-                                val_outputs = model(vinput_feature.to(device))
-                                vloss, vd_loss, vr_loss = merge_loss(val_outputs, (vgt_down, vgt_right))
-                                
-                                val_loss_list.append(vloss.item())
-                                val_down_loss_list.append(vd_loss.item())
-                                val_right_loss_list.append(vr_loss.item())
+                            vgt_down, vgt_right = utils.create_merge_gt(vrow_img, vcol_img, os.path.join(merges_path, img_name + ".pkl"))
+                            
+                            vinput_feature = torch.cat((val_image, 
+                                                    vrow_prob_img, 
+                                                    vcol_prob_img,
+                                                    vrow_region, 
+                                                    vcol_region, 
+                                                    vgrid_img), 
+                                                1)
 
-                                print('Step [{}/{}], Val Loss: {:.4f}, Down Loss: {:.4f}, Right Loss: {:.4f}'
-                                    .format(x + 1, len(val_loader), vloss, vd_loss, vr_loss))
+                            val_outputs = model(vinput_feature.to(device))
+                            vloss, vd_loss, vr_loss = merge_loss(val_outputs, (vgt_down, vgt_right))
+                            
+                            val_loss_list.append(vloss.item())
+                            val_down_loss_list.append(vd_loss.item())
+                            val_right_loss_list.append(vr_loss.item())
 
-                            avg_val_loss = np.mean(np.array(val_loss_list))
-                            avg_down_val_loss = np.mean(np.array(val_down_loss_list))
-                            avg_right_val_loss = np.mean(np.array(val_right_loss_list))
+                            print('Step [{}/{}], Val Loss: {:.4f}, Down Loss: {:.4f}, Right Loss: {:.4f}'
+                                .format(x + 1, len(val_loader), vloss, vd_loss, vr_loss))
 
-                            writer.add_scalar("validation losses/combined loss val", avg_val_loss, (epoch*total_step + i))
-                            writer.add_scalar("validation losses/down loss val", avg_down_val_loss, (epoch*total_step + i))
-                            writer.add_scalar("validation losses/right loss val", avg_right_val_loss, (epoch*total_step + i))
-                          
-                        print(64*"~")
+                        avg_val_loss = np.mean(np.array(val_loss_list))
+                        avg_down_val_loss = np.mean(np.array(val_down_loss_list))
+                        avg_right_val_loss = np.mean(np.array(val_right_loss_list))
+
+                        writer.add_scalar("validation losses/combined loss val", avg_val_loss, (epoch*total_step + i))
+                        writer.add_scalar("validation losses/down loss val", avg_down_val_loss, (epoch*total_step + i))
+                        writer.add_scalar("validation losses/right loss val", avg_right_val_loss, (epoch*total_step + i))
+                      
+                    print(64*"~")
+                    for name, param in model.named_parameters():
+                        if "bias" in name:
+                            writer.add_histogram("bias/"+name, param, step)
+                        else:
+                            writer.add_histogram("weights/"+name, param, step)
 
                 if ((step+1) % configs.save_every == 0):
                     print(65*"=")
@@ -270,12 +275,14 @@ for epoch in range(num_epochs):
                     torch.save({
                         'epoch': epoch+1,
                         'iteration': step+1,
+                        'learning_rate': 0.01,
+                        'optimizer': 'Adamax',
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': total_loss,
                         'd_loss': total_d_loss,
                         'r_loss': total_r_loss
-                    }, MODEL_STORE_PATH+'/merge_model_hr.pth')
+                    }, MODEL_STORE_PATH+'/merge_model_'+str(step+1)+'.pth')
 
                     print(65*"=")
 

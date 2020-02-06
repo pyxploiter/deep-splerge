@@ -83,15 +83,22 @@ class Block(torch.nn.Module):
         temp = torch.tensor((), dtype=torch.float32)
         bottom_branch_grid_pools = temp.new_zeros((batch_size, 1, len(row_mids)-1, len(col_mids)-1))
 
+        # for row_id in range(1, len(row_mids)):
+        #     for col_id in range(1, len(col_mids)):
+        #         grid_mean = torch.mean(bottom_branch_x[:, :, row_mids[row_id-1]:row_mids[row_id], col_mids[col_id-1]: col_mids[col_id]])
+        #         bottom_branch_x[:, :, row_mids[row_id-1]:row_mids[row_id], col_mids[col_id-1]: col_mids[col_id]] = grid_mean
+        #         bottom_branch_grid_pools[:, 0, row_id-1, col_id-1] = torch.sigmoid(grid_mean)
+        # bottom_branch_sig_probs = torch.sigmoid(bottom_branch_x)
+        # out_x = torch.cat((top_branch_x, out_feature, bottom_branch_sig_probs), 1)
+
+        # bottom_branch_x_sig = torch.sigmoid(bottom_branch_x)
         for row_id in range(1, len(row_mids)):
             for col_id in range(1, len(col_mids)):
-                grid_mean = torch.mean(bottom_branch_x[:, :, row_mids[row_id-1]:row_mids[row_id], col_mids[col_id-1]: col_mids[col_id]])
+                grid_mean = torch.mean(torch.sigmoid(bottom_branch_x[:, :, row_mids[row_id-1]:row_mids[row_id], col_mids[col_id-1]: col_mids[col_id]]))
                 bottom_branch_x[:, :, row_mids[row_id-1]:row_mids[row_id], col_mids[col_id-1]: col_mids[col_id]] = grid_mean
-                bottom_branch_grid_pools[:, 0, row_id-1, col_id-1] = torch.sigmoid(grid_mean)
+                bottom_branch_grid_pools[:, 0, row_id-1, col_id-1] = grid_mean
                 
-        bottom_branch_sig_probs = torch.sigmoid(bottom_branch_x)
-
-        out_x = torch.cat((top_branch_x, out_feature, bottom_branch_sig_probs), 1)
+        out_x = torch.cat((top_branch_x, out_feature, bottom_branch_x), 1)
 
         if self.block_num > 1:
             return (out_x, bottom_branch_grid_pools)

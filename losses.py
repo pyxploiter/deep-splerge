@@ -77,11 +77,11 @@ def merge_loss(outputs, targets, weights=[0.25, 0.75]):
 
     if torch.isnan(dl2):
         dl2.data = torch.tensor(1e-8).data
-        print("WARNING: dl2_loss is nan. Resetting it to 0.0\n")
+        print("WARNING: dl2_loss is nan. Resetting it to 1e-8\n")
 
     if torch.isnan(dl3): 
         dl3.data = torch.tensor(1e-8).data
-        print("WARNING: dl3_loss is nan. Resetting it to 0.0\n")
+        print("WARNING: dl3_loss is nan. Resetting it to 1e-8\n")
 
     if torch.isnan(rl2): 
         rl2.data = torch.tensor(1e-8).data

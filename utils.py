@@ -1,74 +1,11 @@
+import pickle
+
 import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
 from skimage import transform as sktsf
 from torchvision import transforms as tvtsf
-
-def get_logits(sig_probs):
-    """
-    Arguments:
-    ----------
-    sig_probs: output sigmoid probs from model
-    """
-
-    pos = sig_probs.squeeze(dim=0).view(sig_probs.shape[0],sig_probs.shape[2],1)
-    neg = torch.sub(1, sig_probs.squeeze(dim=0)).view(sig_probs.shape[0],sig_probs.shape[2],1)
-    logits = torch.cat((pos,neg),2)
-    return logits
-
-def cross_entropy_loss(logits, targets):
-    """
-    Arguments:
-    ----------
-    logits: (N, num_classes)
-    targets: (N)
-    """
-    # print(logits.shape, targets.shape)
-    # print(torch.abs(x-y))
-    log_prob = -1.0 * F.log_softmax(logits, 1)
-    loss = log_prob.gather(2, targets.unsqueeze(2))
-    loss = loss.mean()
-    return loss
-
-def split_loss(outputs, targets):
-    """
-    Arguments:
-    ----------
-    outputs: (rpn_outputs, cpn_outputs)
-    targets: (rpn_targets, cpn_targets)
-    """
-    
-    lambda3 = 0.1
-    lambda4 = 0.25
-
-    rpn_outputs, cpn_outputs = outputs
-    rpn_targets, cpn_targets = targets
-
-    r3, r4, r5 = rpn_outputs
-    c3, c4, c5 = cpn_outputs
-    
-
-    # TODO: update cross entropy loss acc. to the paper
-    crit = torch.nn.BCELoss()
-    rpn_targets = rpn_targets.float()
-    cpn_targets = cpn_targets.float()
-    
-    # print(rpn_targets.shape, r3.shape, r3.squeeze(1).shape)
-    rl3 = crit(r3.squeeze(1), rpn_targets)
-    rl4 = crit(r4.squeeze(1), rpn_targets)
-    rl5 = crit(r5.squeeze(1), rpn_targets)
-
-    cl3 = crit(c3.squeeze(1), cpn_targets)
-    cl4 = crit(c4.squeeze(1), cpn_targets)
-    cl5 = crit(c5.squeeze(1), cpn_targets)
-
-    rpn_loss = rl5 + (lambda4 * rl4) + (lambda3 * rl3)
-    cpn_loss = cl5 + (lambda4 * cl4) + (lambda3 * cl3)
-    
-    loss = rpn_loss + cpn_loss
-
-    return loss, rpn_loss, cpn_loss
 
 def collate_fn(batch):
     return tuple(zip(*batch))
@@ -238,3 +175,81 @@ def binary_grid_from_prob_images(row_prob_img, col_prob_img, thresh=0.7, row_smo
     
     return grid, row_img, col_smooth_image
 
+def create_merge_gt(row_image, col_image, merge_file):
+    rows = np.array(get_column_separators(row_image, smoothing=2, is_row=True))
+    cols = np.array(get_column_separators(col_image, smoothing=2, is_row=False))
+
+    with open(merge_file, "rb") as f:
+        merges = pickle.load(f)
+
+    gt_down = np.zeros((rows.shape[0], cols.shape[0] + 1))
+    gt_right = np.zeros((rows.shape[0] + 1, cols.shape[0]))
+
+    for rect in merges["row"]:
+        start_col = np.amax([0] + list(np.where(rect[0] > cols)[0] + 1))
+        end_col = np.amax([0] + list(np.where(rect[2] > cols)[0] + 1))
+
+        start_row = np.amax([0] + list(np.where(rect[1] > rows)[0] + 1))
+        end_row = np.amax([0] + list(np.where(rect[3] > rows)[0] + 1))
+
+        for i in range(start_col, end_col + 1):
+            for j in range(start_row, end_row):
+                gt_down[j, i] = 1
+
+        for i in range(start_col, end_col):
+            for j in range(start_row, end_row + 1):
+                gt_right[j, i] = 1
+
+    for rect in merges["col"]:
+        start_col = np.amax([0] + list(np.where(rect[0] > cols)[0] + 1))
+        end_col = np.amax([0] + list(np.where(rect[2] > cols)[0] + 1))
+
+        start_row = np.amax([0] + list(np.where(rect[1] > rows)[0] + 1))
+        end_row = np.amax([0] + list(np.where(rect[3] > rows)[0] + 1))
+
+        for i in range(start_col, end_col + 1):
+            for j in range(start_row, end_row):
+                gt_down[j, i] = 1
+
+        for i in range(start_col, end_col):
+            for j in range(start_row, end_row + 1):
+                gt_right[j, i] = 1
+
+    return torch.Tensor(gt_down), torch.Tensor(gt_right)
+
+def draw_merge_output(image, grid_img, col_merge, row_merge, colors=((0,0,255),(255,0,0))):
+
+    grid = grid_img.squeeze(0).squeeze(0)
+    image = cv2.resize(image, (grid.shape[1], grid.shape[0]))
+    
+    image_cpy = image.copy()
+
+    row_mids, col_mids = [0], [0]
+    np_grid = grid.cpu().numpy()
+    r_mids, c_mids = get_midpoints_from_grid(np_grid)
+
+    row_mids.extend(r_mids)
+    row_mids.append(grid.shape[0])
+    col_mids.extend(c_mids)
+    col_mids.append(grid.shape[1])
+
+    for row_id in range(1, len(row_mids)):
+        for col_id in range(1, len(col_mids)):
+
+            if row_id <= row_merge.shape[0]:
+                # print("row:",row_merge.shape, row_id-1, col_id-1)
+                if row_merge[row_id-1][col_id-1].item():
+                    x1, y1 = (col_mids[col_id-1]+col_mids[col_id])//2, (row_mids[row_id-1]+row_mids[row_id])//2
+                    x2, y2 = (col_mids[col_id-1]+col_mids[col_id])//2, (row_mids[row_id]+row_mids[row_id+1])//2
+                    cv2.line(image_cpy, (x1,y1), (x2,y2), colors[0], 10) 
+                    
+            if col_id <= col_merge.shape[1]:
+                # print("col:",col_merge.shape, row_id-1, col_id-1)
+                if col_merge[row_id-1][col_id-1].item() == 1:
+                    x1, y1 = (col_mids[col_id-1]+col_mids[col_id])//2, (row_mids[row_id-1]+row_mids[row_id])//2
+                    x2, y2 = (col_mids[col_id]+col_mids[col_id+1])//2, (row_mids[row_id-1]+row_mids[row_id])//2
+                    cv2.line(image_cpy, (x1,y1), (x2,y2), colors[1], 10)
+                    
+    alpha = 0.4
+    image = cv2.addWeighted(image, alpha, image_cpy, 1-alpha, gamma=0)
+    return image
