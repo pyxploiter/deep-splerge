@@ -11,14 +11,15 @@ import utils
 
 from transforms import get_transform
 from dataloader import SplitTableDataset
-from losses import merge_loss
 from merge import MergeModel
 
 parser = argparse.ArgumentParser()
 
 parser.add_argument("-p", "--test_images_dir", dest="train_images_dir", help="Path to training data images.", default="data/org_images")
 parser.add_argument("-l", "--test_labels_dir", dest="train_labels_dir", help="Path to training data labels.", default="data/labels")
+parser.add_argument("-e","--eval", dest="eval", action="store_true", help="evaluation flag")
 parser.add_argument("-w","--weight_path", dest="weight_path", help="path for model weights.", default="model")
+parser.add_argument("-t","--thresh", dest="thresh", help="threshold for true positive", default=0.70)
 parser.add_argument("--vs","--validation_split", type=float, dest="validation_split", help="validation split in data", default=0.008)
 
 configs = parser.parse_args()
@@ -26,6 +27,7 @@ configs = parser.parse_args()
 print(25*"=", "Configuration", 25*"=")
 print("Data Images Directory:", configs.train_images_dir)
 print("Data Labels Directory:", configs.train_labels_dir)
+print("Evaluation Mode:", configs.eval)
 print(65*"=")
 
 train_images_path = configs.train_images_dir
@@ -72,7 +74,10 @@ model.eval()
 if not os.path.exists("outputs"):
       os.mkdir("outputs")
 
+row_tp, row_tn, row_fn, row_fp = 0,0,0,0
+col_tp, col_tn, col_fn, col_fp = 0,0,0,0
 
+thresh = configs.thresh
 with torch.no_grad():
     for i, (image, target, img_path, W, H) in enumerate(val_dataset):
         try:
@@ -87,7 +92,6 @@ with torch.no_grad():
             row_prob = split_outputs["row_prob"]
             col_prob = split_outputs["col_prob"]
 
-            thresh = 0.7
             image_shape = image.shape
             col_prob_img = utils.probs_to_image(col_prob.detach().clone(), image_shape, axis=0)
             row_prob_img = utils.probs_to_image(row_prob.detach().clone(), image_shape, axis=1)
@@ -124,12 +128,23 @@ with torch.no_grad():
             outputs = model(input_feature.to(device))
 
             row_merge = outputs[1].squeeze(0).squeeze(0)
-            row_merge[row_merge > 0.75] = 1
-            row_merge[row_merge <= 0.75] = 0
+            row_merge[row_merge > thresh] = 1
+            row_merge[row_merge <= thresh] = 0
             
             col_merge = outputs[3].squeeze(0).squeeze(0)
-            col_merge[col_merge > 0.75] = 1
-            col_merge[col_merge <= 0.75] = 0
+            col_merge[col_merge > thresh] = 1
+            col_merge[col_merge <= thresh] = 0
+
+            if configs.eval:
+                  row_tp += np.count_nonzero(((row_merge.cpu() == 1) & (gt_down == 1)).numpy())
+                  row_tn += np.count_nonzero(((row_merge.cpu() == 0) & (gt_down == 0)).numpy())
+                  row_fn += np.count_nonzero(((row_merge.cpu() == 0) & (gt_down == 1)).numpy())
+                  row_fp += np.count_nonzero(((row_merge.cpu() == 1) & (gt_down == 0)).numpy())
+
+                  col_tp += np.count_nonzero(((col_merge.cpu() == 1) & (gt_right == 1)).numpy())
+                  col_tn += np.count_nonzero(((col_merge.cpu() == 0) & (gt_right == 0)).numpy())
+                  col_fn += np.count_nonzero(((col_merge.cpu() == 0) & (gt_right == 1)).numpy())
+                  col_fp += np.count_nonzero(((col_merge.cpu() == 1) & (gt_right == 0)).numpy())
 
             grid_np_img = utils.tensor_to_numpy_image(grid_img)
             grid_np_img = cv2.resize(grid_np_img, (W,H))
@@ -148,3 +163,25 @@ with torch.no_grad():
             # exit(0)
         except Exception as e:
             print(e)
+
+row_precision = row_tp / (row_tp + row_fp)
+row_recall = row_tp / (row_tp + row_fn)
+row_accuracy = (row_tp + row_tn) / (row_tp + row_fp + row_tn + row_fn)  
+row_f1 = 2 * (row_precision * row_recall) / (row_precision + row_recall)
+
+col_precision = col_tp / (col_tp + col_fp)
+col_recall = col_tp / (col_tp + col_fn)
+col_accuracy = (col_tp + col_tn) / (col_tp + col_fp + col_tn + col_fn)  
+col_f1 = 2 * (col_precision * col_recall) / (col_precision + col_recall)
+
+print("Row:")
+print("Precision:", row_precision)
+print("Recall:", row_recall)
+print("Accuracy:", row_accuracy)
+print("F1 Score:", row_f1)
+
+print("Column:")
+print("Precision:", col_precision)
+print("Recall:", col_recall)
+print("Accuracy:", col_accuracy)
+print("F1 Score:", col_f1)
