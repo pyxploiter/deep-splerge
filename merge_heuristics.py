@@ -42,6 +42,9 @@ def row_merging(_table, ocr_data):
                 _table.gtSpans.append(merging_row)
     _table.evaluateCells()
 
+def merge_header():
+    pass
+
 
 def get_table(_list_rows, _list_col, h, w):
     _list_row_obj = []
