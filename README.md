@@ -8,8 +8,7 @@ This repository contains split model for table structure extraction. The model p
     - merge.py
     - eval.py
     
-A model has been provided with this repository placed at ```model_out/split_model.pth```. The model has been trained on an augmented data-set created from the originally provided labelled dataset. The augmentation script can be found in repository 
-`DL_Table_Structure_Detection` placed at `TIES_DataGeneration/augment_data.py` alongwith a README.md file explaining how to use it.
+A model has been provided with this repository placed at ```model_out/split_model.pth```. The model has been trained on an augmented data-set created from the originally provided labelled dataset.
 
 ## Usages
 
