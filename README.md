@@ -17,6 +17,7 @@ A model has been provided with this repository placed at ```model_out/split_mode
 ```prepare_data.py``` takes as input the original labelled dataset (images, XML files and OCR files) and prepares the data for usage by the split model. Specifically it creates crops of tables out of the original dataset and generates corresponding split model labels and OCR.
 
 ```Note: If provided OCR directory does not contain the corresponding OCR files, the program will generate OCR data and write it to the folder. ```
+** XMLS are data annotations in PascalVoc format. **  
 
 ```
 usage: prepare_data.py [-h] -img IMAGE_DIR -xml XML_DIR -ocr OCR_DIR -o OUT_DIR
@@ -24,11 +25,11 @@ usage: prepare_data.py [-h] -img IMAGE_DIR -xml XML_DIR -ocr OCR_DIR -o OUT_DIR
 optional arguments:
   -h, --help            show this help message and exit
   -img IMAGE_DIR, --image_dir IMAGE_DIR
-                        Directory containing document-level images
+                        Directory containing images
   -xml XML_DIR, --xml_dir XML_DIR
-                        Directory containing document-level xmls
+                        Directory containing ground truth xmls in PasvalVoc Format
   -ocr OCR_DIR, --ocr_dir OCR_DIR
-                        Directory containing document-level ocr files. (If an
+                        Directory containing ocr files. (If an
                         OCR file is not found, it will be generated and saved
                         in this directory for future use)
   -o OUT_DIR, --out_dir OUT_DIR
